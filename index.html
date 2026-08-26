@@ -167,31 +167,45 @@ let viewWeekStart = getMonday(new Date());
 let selectedDateISO = null;
 let selectedSlot = null;
 
-// ---------- storage ----------
+// ---------- storage (JSONBin.io — работает на GitHub Pages) ----------
+// 1) Зарегистрируйся на https://jsonbin.io (бесплатно), создай Bin с содержимым {}
+// 2) Вставь сюда свой X-Master-Key и ID бина:
+const JSONBIN_ID  = "ВСТАВЬ_BIN_ID_СЮДА";
+const JSONBIN_KEY = "ВСТАВЬ_X-MASTER-KEY_СЮДА";
+const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_ID}`;
+
+const DEFAULTS = {
+  settings: { headerMessage: "Ниже — моё расписание на ближайшие недели. Выбирайте удобный слот из предложенных, и я закреплю его за вами 🙂", workStart: "09:00", workEnd: "21:00", duration: 60 },
+  rules: [
+    { id:'r1', days:[0,2,4,5,6], windows:[{start:'09:00',end:'21:00'}], startDate: todayISO(), endDate: null },
+    { id:'r2', days:[1,3], windows:[{start:'11:00',end:'12:00'},{start:'20:00',end:'21:00'}], startDate: todayISO(), endDate: null }
+  ],
+  blockedDates: [],
+  bookings: []
+};
+
 async function loadAll(){
-  const defaults = {
-    settings: state.settings,
-    rules: [
-      { id:'r1', days:[0,2,4,5,6], windows:[{start:'09:00',end:'21:00'}], startDate: todayISO(), endDate: null },
-      { id:'r2', days:[1,3], windows:[{start:'11:00',end:'12:00'},{start:'20:00',end:'21:00'}], startDate: todayISO(), endDate: null }
-    ],
-    blockedDates: [],
-    bookings: []
-  };
-  for(const key of ['settings','rules','blockedDates','bookings']){
-    try{
-      const res = await window.storage.get(key, true);
-      state[key] = res ? JSON.parse(res.value) : defaults[key];
-    }catch(e){
-      state[key] = defaults[key];
+  try{
+    const res = await fetch(JSONBIN_URL + '/latest', { headers: { 'X-Master-Key': JSONBIN_KEY } });
+    const data = await res.json();
+    const remote = data.record || {};
+    for(const key of ['settings','rules','blockedDates','bookings']){
+      state[key] = remote[key] ?? DEFAULTS[key];
     }
+  }catch(e){
+    for(const key of ['settings','rules','blockedDates','bookings']) state[key] = DEFAULTS[key];
+    showToast('Не удалось загрузить данные — показаны значения по умолчанию.');
   }
 }
 async function save(key){
   try{
-    await window.storage.set(key, JSON.stringify(state[key]), true);
+    await fetch(JSONBIN_URL, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY },
+      body: JSON.stringify({ settings: state.settings, rules: state.rules, blockedDates: state.blockedDates, bookings: state.bookings })
+    });
   }catch(e){
-    showToast('Не удалось сохранить. Попробуйте снова.');
+    showToast('Не удалось сохранить. Проверьте интернет-соединение.');
   }
 }
 
@@ -265,7 +279,6 @@ function renderApp(){
         <div class="brand-mark">РЗ</div>
         <h1>Расписание занятий</h1>
       </div>
-      <button class="ghost-btn" id="adminToggle">⚙ Режим репетитора</button>
     </div>
     <div class="card intro">
       <p id="headerMsgText"></p>
@@ -282,7 +295,6 @@ function renderApp(){
     <div class="card slots-panel hidden" id="slotsPanel"></div>
   `;
   document.getElementById('headerMsgText').textContent = state.settings.headerMessage;
-  document.getElementById('adminToggle').onclick = openAdmin;
   document.getElementById('prevWeek').onclick = ()=>{ viewWeekStart = addDays(viewWeekStart,-7); renderWeek(); };
   document.getElementById('nextWeek').onclick = ()=>{ viewWeekStart = addDays(viewWeekStart,7); renderWeek(); };
   document.getElementById('todayBtn').onclick = ()=>{ viewWeekStart = getMonday(new Date()); renderWeek(); };
@@ -411,6 +423,32 @@ function showBookingForm(isProposal){
     setTimeout(()=>{ if(document.getElementById('slotGrid')) renderSlotsPanel(); }, 50);
   };
 }
+
+// ---------- скрытый доступ к режиму репетитора ----------
+// Открывается только по ссылке вида index.html#teacher + правильный пароль.
+// В коде хранится не сам пароль, а его SHA-256 хэш — просмотр исходника его не раскрывает.
+// Чтобы задать/сменить пароль: открой консоль браузера (F12) и выполни
+//   crypto.subtle.digest('SHA-256', new TextEncoder().encode('ТВОЙ_ПАРОЛЬ')).then(b=>console.log(Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('')))
+// и вставь результат вместо строки ниже.
+const ADMIN_HASH = "ВСТАВЬ_СЮДА_SHA256_ХЭШ_ПАРОЛЯ";
+
+async function sha256(text){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map(x=>x.toString(16).padStart(2,'0')).join('');
+}
+async function tryOpenAdminByHash(){
+  if(location.hash !== '#teacher') return;
+  const pass = prompt('Пароль режима репетитора:');
+  if(pass===null) { history.replaceState(null,'',location.pathname); return; }
+  const hash = await sha256(pass);
+  if(hash === ADMIN_HASH){
+    openAdmin();
+  } else {
+    showToast('Неверный пароль');
+  }
+  history.replaceState(null,'',location.pathname); // убираем #teacher из адресной строки
+}
+window.addEventListener('hashchange', tryOpenAdminByHash);
 
 // ---------- admin drawer ----------
 function openAdmin(){
@@ -638,6 +676,7 @@ function showToast(msg){
 (async function init(){
   await loadAll();
   renderApp();
+  tryOpenAdminByHash();
 })();
 </script>
 </body>
